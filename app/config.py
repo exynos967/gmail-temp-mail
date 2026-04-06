@@ -16,8 +16,6 @@ class GmailAccount:
 
 
 class Settings(BaseSettings):
-    gmail_address: str = ''
-    gmail_app_password: str = ''
     service_api_key: str = ''
     jwt_secret: str = ''
     database_path: str = 'gmail_temp_mail.db'
@@ -35,19 +33,9 @@ class Settings(BaseSettings):
         return value
 
     def get_gmail_accounts(self) -> list[GmailAccount]:
-        numbered_accounts = self._parse_numbered_gmail_accounts(
+        return self._parse_numbered_gmail_accounts(
             self._load_environment_values()
         )
-        if numbered_accounts:
-            return numbered_accounts
-        if not self.gmail_address or not self.gmail_app_password:
-            return []
-        return [
-            GmailAccount(
-                address=normalize_gmail_address(self.gmail_address),
-                app_password=self._normalize_app_password(self.gmail_app_password),
-            )
-        ]
 
     def get_gmail_account(self, account_address: str) -> GmailAccount:
         normalized_address = normalize_gmail_address(account_address)

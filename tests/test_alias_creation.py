@@ -14,11 +14,12 @@ JWT_SECRET = 'jwt-secret'
 BASE_GMAIL = 'Abc.Def@gmail.com'
 
 
-def build_client(tmp_path: Path) -> TestClient:
+def build_client(tmp_path: Path, monkeypatch) -> TestClient:
+    monkeypatch.setenv('GMAIL_ACCOUNTS_1', BASE_GMAIL)
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_1', 'pass-one')
     settings = Settings(
         service_api_key=API_KEY,
         jwt_secret=JWT_SECRET,
-        gmail_address=BASE_GMAIL,
         database_path=str(tmp_path / 'gmail_temp_mail.db'),
         alias_ttl_minutes=60,
     )
@@ -52,8 +53,19 @@ def test_settings_parse_numbered_gmail_account_pool(monkeypatch) -> None:
     assert [account.app_password for account in accounts] == ['passone', 'pass-two']
 
 
-def test_new_address_requires_service_api_key(tmp_path: Path) -> None:
-    client = build_client(tmp_path)
+def test_settings_no_longer_supports_single_account_fields() -> None:
+    settings = Settings(
+        service_api_key=API_KEY,
+        jwt_secret=JWT_SECRET,
+        gmail_address='alpha.one@gmail.com',
+        gmail_app_password='pass-one',
+    )
+
+    assert settings.get_gmail_accounts() == []
+
+
+def test_new_address_requires_service_api_key(tmp_path: Path, monkeypatch) -> None:
+    client = build_client(tmp_path, monkeypatch)
 
     response = client.post('/api/new_address')
 
@@ -61,8 +73,8 @@ def test_new_address_requires_service_api_key(tmp_path: Path) -> None:
     assert response.json() == {'detail': 'Unauthorized'}
 
 
-def test_new_address_returns_alias_and_jwt(tmp_path: Path) -> None:
-    client = build_client(tmp_path)
+def test_new_address_returns_alias_and_jwt(tmp_path: Path, monkeypatch) -> None:
+    client = build_client(tmp_path, monkeypatch)
 
     response = client.post('/api/new_address', headers={'x-custom-auth': API_KEY})
 
@@ -106,7 +118,6 @@ def test_new_address_rejects_invalid_gmail_config(tmp_path: Path) -> None:
     settings = Settings(
         service_api_key=API_KEY,
         jwt_secret=JWT_SECRET,
-        gmail_address='your_account@gmail.com',
         database_path=str(tmp_path / 'invalid.db'),
     )
     client = TestClient(create_app(settings), raise_server_exceptions=False)
@@ -114,4 +125,4 @@ def test_new_address_rejects_invalid_gmail_config(tmp_path: Path) -> None:
     response = client.post('/api/new_address', headers={'x-custom-auth': API_KEY})
 
     assert response.status_code == 500
-    assert response.json() == {'detail': 'Gmail address is invalid'}
+    assert response.json() == {'detail': 'Gmail address is not configured'}

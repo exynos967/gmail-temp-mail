@@ -11,11 +11,12 @@ JWT_SECRET = 'jwt-secret'
 BASE_GMAIL = 'Abc.Def@gmail.com'
 
 
-def build_client(tmp_path: Path) -> TestClient:
+def build_client(tmp_path: Path, monkeypatch) -> TestClient:
+    monkeypatch.setenv('GMAIL_ACCOUNTS_1', BASE_GMAIL)
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_1', 'pass-one')
     settings = Settings(
         service_api_key=API_KEY,
         jwt_secret=JWT_SECRET,
-        gmail_address=BASE_GMAIL,
         database_path=str(tmp_path / 'gmail_temp_mail.db'),
         alias_ttl_minutes=60,
     )
@@ -38,8 +39,8 @@ def seed_mail(client: TestClient, alias: dict[str, str], raw: str) -> dict[str, 
     )
 
 
-def test_list_mails_requires_bearer_token(tmp_path: Path) -> None:
-    client = build_client(tmp_path)
+def test_list_mails_requires_bearer_token(tmp_path: Path, monkeypatch) -> None:
+    client = build_client(tmp_path, monkeypatch)
 
     response = client.get('/api/mails?limit=10&offset=0')
 
@@ -47,8 +48,8 @@ def test_list_mails_requires_bearer_token(tmp_path: Path) -> None:
 
 
 
-def test_mail_endpoints_only_return_current_alias_records(tmp_path: Path) -> None:
-    client = build_client(tmp_path)
+def test_mail_endpoints_only_return_current_alias_records(tmp_path: Path, monkeypatch) -> None:
+    client = build_client(tmp_path, monkeypatch)
     first_alias = create_alias(client)
     second_alias = create_alias(client)
     seed_mail(client, first_alias, 'Subject: First\n\nalpha')
@@ -75,8 +76,8 @@ def test_mail_endpoints_only_return_current_alias_records(tmp_path: Path) -> Non
 
 
 
-def test_delete_mail_removes_current_alias_message(tmp_path: Path) -> None:
-    client = build_client(tmp_path)
+def test_delete_mail_removes_current_alias_message(tmp_path: Path, monkeypatch) -> None:
+    client = build_client(tmp_path, monkeypatch)
     alias = create_alias(client)
     mail = seed_mail(client, alias, 'Subject: Delete me\n\nbody')
 

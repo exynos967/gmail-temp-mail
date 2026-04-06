@@ -1,10 +1,10 @@
 # gmail-temp-mail
 
-一个基于 Gmail IMAP 的精简临时邮箱服务，只提供 Docker 部署，支持单账号或多账号邮箱池。
+一个基于 Gmail IMAP 的精简临时邮箱服务，只提供 Docker 部署，使用编号邮箱池配置。
 
 ## 特性
 
-- 基于 `.env` 中的 Gmail 单账号或账号池随机生成别名
+- 基于 `.env` 中的 Gmail 邮箱池随机生成别名
 - 别名规则：`点号 + 大小写 + gmail.com/googlemail.com`
 - `POST /api/new_address` 返回别名和对应 Bearer JWT
 - 只从“别名创建之后”开始接收新邮件
@@ -46,8 +46,6 @@ docker compose up -d
 
 | 变量 | 说明 |
 |---|---|
-| `GMAIL_ADDRESS` | 单账号模式使用的 Gmail 主账号 |
-| `GMAIL_APP_PASSWORD` | 单账号模式使用的 Gmail App Password |
 | `GMAIL_ACCOUNTS_1` / `GMAIL_APP_PASSWORD_1` | 多账号模式第 1 个账号及其 App Password |
 | `GMAIL_ACCOUNTS_2` / `GMAIL_APP_PASSWORD_2` | 多账号模式第 2 个账号及其 App Password，可继续递增 |
 | `SERVICE_API_KEY` | 创建别名时使用的 `x-custom-auth` |
@@ -69,7 +67,6 @@ GMAIL_APP_PASSWORD_2=app_password_two
 说明：
 - 只要存在成对的 `GMAIL_ACCOUNTS_N` + `GMAIL_APP_PASSWORD_N`，就会进入邮箱池并在创建别名时随机选择一个账号
 - 每个账号都会独立维护自己的 IMAP 增量同步游标
-- 旧的 `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` 仍可继续使用
 
 ## API
 
