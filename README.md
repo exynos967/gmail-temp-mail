@@ -1,14 +1,14 @@
 # gmail-temp-mail
 
-一个基于 Gmail IMAP 的精简临时邮箱服务，只提供 Docker 部署。
+一个基于 Gmail IMAP 的精简临时邮箱服务，只提供 Docker 部署，支持单账号或多账号邮箱池。
 
 ## 特性
 
-- 基于 `.env` 中的 Gmail 主邮箱生成随机别名
+- 基于 `.env` 中的 Gmail 单账号或账号池随机生成别名
 - 别名规则：`点号 + 大小写 + gmail.com/googlemail.com`
 - `POST /api/new_address` 返回别名和对应 Bearer JWT
 - 只从“别名创建之后”开始接收新邮件
-- 后台通过 Gmail IMAP 增量同步，接口只返回原始 RFC822 邮件 `raw`
+- 后台按账号分别通过 Gmail IMAP 增量同步，接口只返回原始 RFC822 邮件 `raw`
 - 使用 SQLite 落盘，支持重启恢复
 - 自动清理过期别名与超时邮件
 
@@ -46,14 +46,26 @@ docker compose up -d
 
 | 变量 | 说明 |
 |---|---|
-| `GMAIL_ADDRESS` | 用于接收邮件的 Gmail 主账号 |
-| `GMAIL_APP_PASSWORD` | Gmail App Password |
+| `GMAIL_ADDRESS` | 单账号模式使用的 Gmail 主账号 |
+| `GMAIL_APP_PASSWORD` | 单账号模式使用的 Gmail App Password |
+| `GMAIL_ACCOUNTS` | 多账号模式邮箱池，格式：`邮箱1:密码1,邮箱2:密码2`，配置后优先于单账号字段 |
 | `SERVICE_API_KEY` | 创建别名时使用的 `x-custom-auth` |
 | `JWT_SECRET` | 别名级 Bearer token 的签名密钥 |
 | `DATABASE_PATH` | SQLite 文件路径，默认挂载到 `/data` |
 | `POLL_INTERVAL_SECONDS` | IMAP 同步轮询间隔 |
 | `ALIAS_TTL_MINUTES` | 别名有效期 |
 | `MAIL_TTL_MINUTES` | 邮件保留期 |
+
+多账号示例：
+
+```env
+GMAIL_ACCOUNTS=alpha.one@gmail.com:app_password_one,beta.two@gmail.com:app_password_two
+```
+
+说明：
+- `GMAIL_ACCOUNTS` 配置后，会进入邮箱池并在创建别名时随机选择一个账号
+- 每个账号都会独立维护自己的 IMAP 增量同步游标
+- 旧的 `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` 仍可继续使用
 
 ## API
 

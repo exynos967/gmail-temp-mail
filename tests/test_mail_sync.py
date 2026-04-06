@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.config import Settings
+from app.config import GmailAccount, Settings
 from app.db import Database
 from app.mail_sync import MailSyncService, RemoteMail
 from app.main import create_app
@@ -12,6 +12,8 @@ from app.main import create_app
 API_KEY = 'service-secret'
 JWT_SECRET = 'jwt-secret'
 BASE_GMAIL = 'abcdef@gmail.com'
+PRIMARY_ACCOUNT = GmailAccount(address='primaryone@gmail.com', app_password='pass-one')
+SECONDARY_ACCOUNT = GmailAccount(address='secondarytwo@gmail.com', app_password='pass-two')
 
 
 class FakeImapClient:
@@ -29,22 +31,29 @@ class FakeImapClient:
 
 
 
-def build_service(tmp_path: Path, mailbox: list[RemoteMail]) -> MailSyncService:
-    settings = Settings(
+def build_service(
+    tmp_path: Path,
+    mailbox_by_account: dict[str, list[RemoteMail]],
+    *,
+    settings: Settings | None = None,
+) -> MailSyncService:
+    resolved_settings = settings or Settings(
         service_api_key=API_KEY,
         jwt_secret=JWT_SECRET,
-        gmail_address=BASE_GMAIL,
-        gmail_app_password='app-password',
+        gmail_accounts=(
+            'primary.one@gmail.com:pass-one,'
+            'secondary.two@gmail.com:pass-two'
+        ),
         database_path=str(tmp_path / 'gmail_temp_mail.db'),
         alias_ttl_minutes=60,
         mail_ttl_minutes=60,
     )
-    database = Database(settings.database_path)
+    database = Database(resolved_settings.database_path)
     database.initialize()
     return MailSyncService(
-        settings=settings,
+        settings=resolved_settings,
         database=database,
-        client_factory=lambda: FakeImapClient(mailbox),
+        client_factory=lambda account: FakeImapClient(mailbox_by_account[account.address]),
     )
 
 
@@ -62,23 +71,40 @@ def build_raw_mail(*, to_address: str, subject: str, message_id: str) -> bytes:
 
 
 def test_first_sync_initializes_uid_baseline_without_importing_old_mail(tmp_path: Path) -> None:
-    mailbox = [
-        RemoteMail(uid=1, raw=build_raw_mail(to_address='nobody@gmail.com', subject='old', message_id='<old@example.com>')),
-    ]
-    service = build_service(tmp_path, mailbox)
+    mailbox_by_account = {
+        PRIMARY_ACCOUNT.address: [
+            RemoteMail(uid=1, raw=build_raw_mail(to_address='nobody@gmail.com', subject='old', message_id='<old@example.com>')),
+        ],
+        SECONDARY_ACCOUNT.address: [
+            RemoteMail(uid=7, raw=build_raw_mail(to_address='none@gmail.com', subject='old2', message_id='<old2@example.com>')),
+        ],
+    }
+    service = build_service(tmp_path, mailbox_by_account)
 
     inserted = service.sync_once()
 
     assert inserted == 0
-    assert service.database.get_last_seen_uid() == 1
+    assert service.database.get_last_seen_uid(PRIMARY_ACCOUNT.address) == 1
+    assert service.database.get_last_seen_uid(SECONDARY_ACCOUNT.address) == 7
 
 
 
 def test_new_address_uses_live_mailbox_uid_as_start_boundary(tmp_path: Path) -> None:
-    mailbox = [
-        RemoteMail(uid=5, raw=build_raw_mail(to_address='someone@gmail.com', subject='existing', message_id='<existing@example.com>')),
-    ]
-    service = build_service(tmp_path, mailbox)
+    mailbox_by_account = {
+        PRIMARY_ACCOUNT.address: [
+            RemoteMail(uid=5, raw=build_raw_mail(to_address='someone@gmail.com', subject='existing', message_id='<existing@example.com>')),
+        ],
+        SECONDARY_ACCOUNT.address: [],
+    }
+    settings = Settings(
+        service_api_key=API_KEY,
+        jwt_secret=JWT_SECRET,
+        gmail_accounts='primary.one@gmail.com:pass-one,secondary.two@gmail.com:pass-two',
+        database_path=str(tmp_path / 'gmail_temp_mail.db'),
+        alias_ttl_minutes=60,
+        mail_ttl_minutes=60,
+    )
+    service = build_service(tmp_path, mailbox_by_account, settings=settings)
     client = TestClient(create_app(service.settings, mail_sync_service=service))
 
     response = client.post('/api/new_address', headers={'x-custom-auth': API_KEY})
@@ -87,25 +113,34 @@ def test_new_address_uses_live_mailbox_uid_as_start_boundary(tmp_path: Path) -> 
     payload = response.json()
     stored_alias = service.database.get_alias(payload['address_id'])
     assert stored_alias is not None
-    assert stored_alias.start_uid == 5
+    baseline = service.get_current_uid_baseline(stored_alias.account_address)
+    assert stored_alias.start_uid == baseline
 
 
 
-def test_sync_imports_only_mail_after_alias_start_uid_and_deduplicates_uid(tmp_path: Path) -> None:
-    mailbox: list[RemoteMail] = []
-    service = build_service(tmp_path, mailbox)
+def test_sync_imports_only_mail_from_same_account_after_alias_start_uid(tmp_path: Path) -> None:
+    mailbox_by_account = {
+        PRIMARY_ACCOUNT.address: [],
+        SECONDARY_ACCOUNT.address: [],
+    }
+    service = build_service(tmp_path, mailbox_by_account)
     now = datetime.now(UTC)
     alias = service.database.create_alias(
         address='alias.one@gmail.com',
+        account_address=PRIMARY_ACCOUNT.address,
         created_at=now,
         expires_at=now + timedelta(minutes=60),
         start_uid=10,
     )
-    service.database.set_last_seen_uid(10)
-    mailbox.extend([
+    service.database.set_last_seen_uid(PRIMARY_ACCOUNT.address, 10)
+    service.database.set_last_seen_uid(SECONDARY_ACCOUNT.address, 20)
+    mailbox_by_account[PRIMARY_ACCOUNT.address].extend([
         RemoteMail(uid=10, raw=build_raw_mail(to_address=alias.address, subject='old', message_id='<old@example.com>')),
         RemoteMail(uid=11, raw=build_raw_mail(to_address=alias.address, subject='fresh', message_id='<fresh@example.com>')),
     ])
+    mailbox_by_account[SECONDARY_ACCOUNT.address].append(
+        RemoteMail(uid=21, raw=build_raw_mail(to_address=alias.address, subject='wrong-account', message_id='<wrong@example.com>')),
+    )
 
     inserted = service.sync_once()
 
@@ -114,27 +149,33 @@ def test_sync_imports_only_mail_after_alias_start_uid_and_deduplicates_uid(tmp_p
     stored_mail = service.database.list_mails(alias.address, limit=10, offset=0)[0]
     assert 'Subject: fresh' in stored_mail['raw']
 
-    service.database.set_last_seen_uid(10)
+    service.database.set_last_seen_uid(PRIMARY_ACCOUNT.address, 10)
     inserted_again = service.sync_once()
 
     assert inserted_again == 0
     assert service.database.count_mails(alias.address) == 1
 
 
+
 def test_sync_once_cleans_expired_aliases_and_old_mail(tmp_path: Path) -> None:
-    mailbox: list[RemoteMail] = []
-    service = build_service(tmp_path, mailbox)
+    mailbox_by_account = {
+        PRIMARY_ACCOUNT.address: [],
+        SECONDARY_ACCOUNT.address: [],
+    }
+    service = build_service(tmp_path, mailbox_by_account)
     now = datetime.now(UTC)
     expired_at = now - timedelta(minutes=5)
     old_received_at = now - timedelta(minutes=120)
     expired_alias = service.database.create_alias(
         address='expired.alias@gmail.com',
+        account_address=PRIMARY_ACCOUNT.address,
         created_at=old_received_at,
         expires_at=expired_at,
         start_uid=0,
     )
     active_alias = service.database.create_alias(
         address='active.alias@gmail.com',
+        account_address=SECONDARY_ACCOUNT.address,
         created_at=now,
         expires_at=now + timedelta(minutes=60),
         start_uid=0,
@@ -155,7 +196,8 @@ def test_sync_once_cleans_expired_aliases_and_old_mail(tmp_path: Path) -> None:
         raw='active raw',
         received_at=now,
     )
-    service.database.set_last_seen_uid(0)
+    service.database.set_last_seen_uid(PRIMARY_ACCOUNT.address, 0)
+    service.database.set_last_seen_uid(SECONDARY_ACCOUNT.address, 0)
 
     inserted = service.sync_once()
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -8,9 +9,9 @@ import jwt
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
-from app.aliasing import generate_random_gmail_alias, normalize_gmail_address
+from app.aliasing import generate_random_gmail_alias
 from app.auth import AddressTokenPayload, require_address_token, require_service_api_key
-from app.config import Settings
+from app.config import GmailAccount, Settings
 from app.db import AliasRecord, Database
 from app.mail_sync import MailSyncService, NullMailSyncService
 
@@ -65,11 +66,13 @@ def create_app(
         current_settings: Settings = request.app.state.settings
         current_database: Database = request.app.state.database
         _validate_alias_creation_settings(current_settings)
+        selected_account = select_random_gmail_account(current_settings)
 
         alias_record = _create_unique_alias(
             current_database,
             current_settings,
-            request.app.state.mail_sync.get_current_uid_baseline(),
+            selected_account.address,
+            request.app.state.mail_sync.get_current_uid_baseline(selected_account.address),
         )
         token = jwt.encode(
             {
@@ -122,28 +125,41 @@ def create_app(
 
 
 def _validate_alias_creation_settings(settings: Settings) -> None:
-    if not settings.gmail_address:
-        raise HTTPException(status_code=500, detail='Gmail address is not configured')
     try:
-        normalize_gmail_address(settings.gmail_address)
+        if not settings.get_gmail_accounts():
+            raise HTTPException(status_code=500, detail='Gmail address is not configured')
     except ValueError as exc:
         raise HTTPException(status_code=500, detail='Gmail address is invalid') from exc
     if not settings.jwt_secret:
         raise HTTPException(status_code=500, detail='JWT secret is not configured')
 
 
+def select_random_gmail_account(settings: Settings) -> GmailAccount:
+    accounts = settings.get_gmail_accounts()
+    if not accounts:
+        raise HTTPException(status_code=500, detail='Gmail address is not configured')
+    return random.SystemRandom().choice(accounts)
+
+
 def _create_unique_alias(
     database: Database,
     settings: Settings,
+    account_address: str,
     start_uid: int,
 ) -> AliasRecord:
     created_at = datetime.now(UTC)
     expires_at = created_at + timedelta(minutes=settings.alias_ttl_minutes)
 
     for _ in range(20):
-        address = generate_random_gmail_alias(settings.gmail_address)
+        address = generate_random_gmail_alias(account_address)
         try:
-            return database.create_alias(address, created_at, expires_at, start_uid=start_uid)
+            return database.create_alias(
+                address,
+                account_address,
+                created_at,
+                expires_at,
+                start_uid=start_uid,
+            )
         except sqlite3.IntegrityError:
             continue
 

@@ -11,7 +11,7 @@ from email.parser import BytesParser
 from email.utils import getaddresses
 from typing import Callable, Protocol
 
-from app.config import Settings
+from app.config import GmailAccount, Settings
 from app.db import Database
 
 
@@ -31,8 +31,8 @@ class MailboxClient(Protocol):
 
 
 class GmailImapClient:
-    def __init__(self, settings: Settings):
-        self.settings = settings
+    def __init__(self, account: GmailAccount):
+        self.account = account
         self._connection: imaplib.IMAP4_SSL | None = None
 
     def _ensure_connection(self) -> imaplib.IMAP4_SSL:
@@ -40,7 +40,7 @@ class GmailImapClient:
             return self._connection
 
         connection = imaplib.IMAP4_SSL('imap.gmail.com', 993)
-        connection.login(self.settings.gmail_address, self.settings.gmail_app_password)
+        connection.login(self.account.address, self.account.app_password)
         status, _ = connection.select('INBOX')
         if status != 'OK':
             raise RuntimeError('Failed to select INBOX')
@@ -88,14 +88,8 @@ class NullMailSyncService:
     def __init__(self, database: Database):
         self.database = database
 
-    def get_current_uid_baseline(self) -> int:
-        return max(self.database.get_last_seen_uid(), 0)
-
-
-    def _run_cleanup(self) -> None:
-        now = datetime.now(UTC)
-        self.database.delete_expired_aliases(now)
-        self.database.delete_expired_mails(now - timedelta(minutes=self.settings.mail_ttl_minutes))
+    def get_current_uid_baseline(self, account_address: str) -> int:
+        return max(self.database.get_last_seen_uid(account_address), 0)
 
     def start(self) -> None:
         return None
@@ -110,16 +104,16 @@ class MailSyncService:
         *,
         settings: Settings,
         database: Database,
-        client_factory: Callable[[], MailboxClient] | None = None,
+        client_factory: Callable[[GmailAccount], MailboxClient] | None = None,
     ):
         self.settings = settings
         self.database = database
-        self.client_factory = client_factory or (lambda: GmailImapClient(settings))
+        self.client_factory = client_factory or GmailImapClient
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
-    def get_current_uid_baseline(self) -> int:
-        client = self.client_factory()
+    def get_current_uid_baseline(self, account_address: str) -> int:
+        client = self.client_factory(self.settings.get_gmail_account(account_address))
         try:
             return client.get_max_uid()
         finally:
@@ -127,25 +121,35 @@ class MailSyncService:
 
     def sync_once(self) -> int:
         self._run_cleanup()
-        client = self.client_factory()
+        inserted = 0
+        for account in self.settings.get_gmail_accounts():
+            inserted += self._sync_account(account)
+        return inserted
+
+    def _sync_account(self, account: GmailAccount) -> int:
+        client = self.client_factory(account)
         try:
-            last_seen_uid = self.database.get_last_seen_uid()
+            last_seen_uid = self.database.get_last_seen_uid(account.address)
             if last_seen_uid < 0:
-                baseline_uid = client.get_max_uid()
-                self.database.set_last_seen_uid(baseline_uid)
-                return 0
+                min_start_uid = self.database.get_lowest_alias_start_uid(account.address)
+                if min_start_uid is None:
+                    baseline_uid = client.get_max_uid()
+                    self.database.set_last_seen_uid(account.address, baseline_uid)
+                    return 0
+                last_seen_uid = min_start_uid - 1
 
             remote_mails = sorted(
                 client.fetch_messages_since(last_seen_uid),
                 key=lambda item: item.uid,
             )
-            inserted = 0
+            inserted_count = 0
             max_seen_uid = last_seen_uid
             for remote_mail in remote_mails:
                 max_seen_uid = max(max_seen_uid, remote_mail.uid)
                 matched_alias = self.database.find_matching_alias(
                     _extract_candidate_addresses(remote_mail.raw),
                     remote_mail.uid,
+                    account.address,
                 )
                 if matched_alias is None:
                     continue
@@ -158,12 +162,12 @@ class MailSyncService:
                         raw=remote_mail.raw.decode('latin-1'),
                         gmail_uid=remote_mail.uid,
                     )
-                    inserted += 1
+                    inserted_count += 1
                 except sqlite3.IntegrityError:
                     logger.debug('skip duplicate mail uid=%s alias_id=%s', remote_mail.uid, matched_alias.id)
             if max_seen_uid != last_seen_uid:
-                self.database.set_last_seen_uid(max_seen_uid)
-            return inserted
+                self.database.set_last_seen_uid(account.address, max_seen_uid)
+            return inserted_count
         finally:
             client.close()
 
@@ -176,7 +180,12 @@ class MailSyncService:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
-        if not self.settings.gmail_address or not self.settings.gmail_app_password:
+        try:
+            accounts = self.settings.get_gmail_accounts()
+        except ValueError:
+            logger.exception('mail sync disabled because Gmail credentials are invalid')
+            return
+        if not accounts:
             logger.info('mail sync disabled because Gmail credentials are not configured')
             return
 

@@ -11,6 +11,7 @@ from typing import Any
 class AliasRecord:
     id: int
     address: str
+    account_address: str
     created_at: datetime
     expires_at: datetime
     start_uid: int = 0
@@ -38,6 +39,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS aliases (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     address TEXT NOT NULL UNIQUE,
+                    account_address TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     start_uid INTEGER NOT NULL DEFAULT 0
@@ -68,8 +70,18 @@ class Database:
                 )
                 '''
             )
+            self._ensure_aliases_account_address_column(connection)
             self._ensure_aliases_start_uid_column(connection)
             connection.commit()
+
+    def _ensure_aliases_account_address_column(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row['name'] for row in connection.execute('PRAGMA table_info(aliases)').fetchall()
+        }
+        if 'account_address' not in columns:
+            connection.execute(
+                "ALTER TABLE aliases ADD COLUMN account_address TEXT NOT NULL DEFAULT ''"
+            )
 
     def _ensure_aliases_start_uid_column(self, connection: sqlite3.Connection) -> None:
         columns = {
@@ -83,14 +95,24 @@ class Database:
     def create_alias(
         self,
         address: str,
+        account_address: str,
         created_at: datetime,
         expires_at: datetime,
         start_uid: int = 0,
     ) -> AliasRecord:
         with self.connect() as connection:
             cursor = connection.execute(
-                'INSERT INTO aliases(address, created_at, expires_at, start_uid) VALUES(?, ?, ?, ?)',
-                (address, created_at.isoformat(), expires_at.isoformat(), start_uid),
+                '''
+                INSERT INTO aliases(address, account_address, created_at, expires_at, start_uid)
+                VALUES(?, ?, ?, ?, ?)
+                ''',
+                (
+                    address,
+                    account_address,
+                    created_at.isoformat(),
+                    expires_at.isoformat(),
+                    start_uid,
+                ),
             )
             connection.commit()
             alias_id = int(cursor.lastrowid)
@@ -98,6 +120,7 @@ class Database:
         return AliasRecord(
             id=alias_id,
             address=address,
+            account_address=account_address,
             created_at=created_at.astimezone(UTC),
             expires_at=expires_at.astimezone(UTC),
             start_uid=start_uid,
@@ -107,7 +130,7 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(
                 '''
-                SELECT id, address, created_at, expires_at, start_uid
+                SELECT id, address, account_address, created_at, expires_at, start_uid
                 FROM aliases
                 WHERE id = ?
                 ''',
@@ -115,7 +138,27 @@ class Database:
             ).fetchone()
         return self._row_to_alias(row)
 
-    def find_matching_alias(self, candidate_addresses: list[str], gmail_uid: int) -> AliasRecord | None:
+    def get_lowest_alias_start_uid(self, account_address: str) -> int | None:
+        now = datetime.now(UTC).isoformat()
+        with self.connect() as connection:
+            row = connection.execute(
+                '''
+                SELECT MIN(start_uid) AS start_uid
+                FROM aliases
+                WHERE account_address = ? AND expires_at > ?
+                ''',
+                (account_address, now),
+            ).fetchone()
+        if row is None or row['start_uid'] is None:
+            return None
+        return int(row['start_uid'])
+
+    def find_matching_alias(
+        self,
+        candidate_addresses: list[str],
+        gmail_uid: int,
+        account_address: str,
+    ) -> AliasRecord | None:
         if not candidate_addresses:
             return None
 
@@ -123,15 +166,16 @@ class Database:
         placeholders = ', '.join('?' for _ in normalized_addresses)
         now = datetime.now(UTC).isoformat()
         query = f'''
-            SELECT id, address, created_at, expires_at, start_uid
+            SELECT id, address, account_address, created_at, expires_at, start_uid
             FROM aliases
             WHERE lower(address) IN ({placeholders})
+              AND account_address = ?
               AND start_uid < ?
               AND expires_at > ?
             ORDER BY id DESC
             LIMIT 1
         '''
-        params = [*normalized_addresses, gmail_uid, now]
+        params = [*normalized_addresses, account_address, gmail_uid, now]
         with self.connect() as connection:
             row = connection.execute(query, params).fetchone()
         return self._row_to_alias(row)
@@ -142,6 +186,7 @@ class Database:
         return AliasRecord(
             id=int(row['id']),
             address=str(row['address']),
+            account_address=str(row['account_address']),
             created_at=datetime.fromisoformat(str(row['created_at'])).astimezone(UTC),
             expires_at=datetime.fromisoformat(str(row['expires_at'])).astimezone(UTC),
             start_uid=int(row['start_uid']),
@@ -244,20 +289,23 @@ class Database:
             connection.commit()
         return cursor.rowcount
 
-    def get_last_seen_uid(self) -> int:
+    def get_last_seen_uid(self, account_address: str) -> int:
+        state_key = f'last_seen_uid:{account_address}'
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT value FROM service_state WHERE key = 'last_seen_uid'"
+                'SELECT value FROM service_state WHERE key = ?',
+                (state_key,),
             ).fetchone()
         return int(row['value']) if row else -1
 
-    def set_last_seen_uid(self, uid: int) -> None:
+    def set_last_seen_uid(self, account_address: str, uid: int) -> None:
+        state_key = f'last_seen_uid:{account_address}'
         with self.connect() as connection:
             connection.execute(
                 '''
-                INSERT INTO service_state(key, value) VALUES('last_seen_uid', ?)
+                INSERT INTO service_state(key, value) VALUES(?, ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
                 ''',
-                (str(uid),),
+                (state_key, str(uid)),
             )
             connection.commit()
