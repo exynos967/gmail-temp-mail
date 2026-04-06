@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -11,16 +12,42 @@ from app.aliasing import generate_random_gmail_alias, normalize_gmail_address
 from app.auth import AddressTokenPayload, require_address_token, require_service_api_key
 from app.config import Settings
 from app.db import AliasRecord, Database
+from app.mail_sync import MailSyncService, NullMailSyncService
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    mail_sync_service: MailSyncService | None = None,
+    start_background_sync: bool = False,
+) -> FastAPI:
     resolved_settings = settings or Settings()
     database = Database(resolved_settings.database_path)
     database.initialize()
+    if mail_sync_service is not None:
+        resolved_mail_sync_service = mail_sync_service
+    elif start_background_sync:
+        resolved_mail_sync_service = MailSyncService(
+            settings=resolved_settings,
+            database=database,
+        )
+    else:
+        resolved_mail_sync_service = NullMailSyncService(database)
 
-    app = FastAPI(title='gmail-temp-mail')
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if start_background_sync:
+            app.state.mail_sync.start()
+        try:
+            yield
+        finally:
+            if start_background_sync:
+                app.state.mail_sync.stop()
+
+    app = FastAPI(title='gmail-temp-mail', lifespan=lifespan)
     app.state.settings = resolved_settings
     app.state.database = database
+    app.state.mail_sync = resolved_mail_sync_service
 
     @app.get('/', response_class=PlainTextResponse)
     def root() -> str:
@@ -39,7 +66,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_database: Database = request.app.state.database
         _validate_alias_creation_settings(current_settings)
 
-        alias_record = _create_unique_alias(current_database, current_settings)
+        alias_record = _create_unique_alias(
+            current_database,
+            current_settings,
+            request.app.state.mail_sync.get_current_uid_baseline(),
+        )
         token = jwt.encode(
             {
                 'address_id': alias_record.id,
@@ -101,14 +132,18 @@ def _validate_alias_creation_settings(settings: Settings) -> None:
         raise HTTPException(status_code=500, detail='JWT secret is not configured')
 
 
-def _create_unique_alias(database: Database, settings: Settings) -> AliasRecord:
+def _create_unique_alias(
+    database: Database,
+    settings: Settings,
+    start_uid: int,
+) -> AliasRecord:
     created_at = datetime.now(UTC)
     expires_at = created_at + timedelta(minutes=settings.alias_ttl_minutes)
 
     for _ in range(20):
         address = generate_random_gmail_alias(settings.gmail_address)
         try:
-            return database.create_alias(address, created_at, expires_at)
+            return database.create_alias(address, created_at, expires_at, start_uid=start_uid)
         except sqlite3.IntegrityError:
             continue
 

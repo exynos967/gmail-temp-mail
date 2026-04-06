@@ -13,6 +13,7 @@ class AliasRecord:
     address: str
     created_at: datetime
     expires_at: datetime
+    start_uid: int = 0
 
 
 class Database:
@@ -38,7 +39,8 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     address TEXT NOT NULL UNIQUE,
                     created_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL
+                    expires_at TEXT NOT NULL,
+                    start_uid INTEGER NOT NULL DEFAULT 0
                 )
                 '''
             )
@@ -58,13 +60,37 @@ class Database:
                 )
                 '''
             )
+            connection.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS service_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                '''
+            )
+            self._ensure_aliases_start_uid_column(connection)
             connection.commit()
 
-    def create_alias(self, address: str, created_at: datetime, expires_at: datetime) -> AliasRecord:
+    def _ensure_aliases_start_uid_column(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row['name'] for row in connection.execute('PRAGMA table_info(aliases)').fetchall()
+        }
+        if 'start_uid' not in columns:
+            connection.execute(
+                'ALTER TABLE aliases ADD COLUMN start_uid INTEGER NOT NULL DEFAULT 0'
+            )
+
+    def create_alias(
+        self,
+        address: str,
+        created_at: datetime,
+        expires_at: datetime,
+        start_uid: int = 0,
+    ) -> AliasRecord:
         with self.connect() as connection:
             cursor = connection.execute(
-                'INSERT INTO aliases(address, created_at, expires_at) VALUES(?, ?, ?)',
-                (address, created_at.isoformat(), expires_at.isoformat()),
+                'INSERT INTO aliases(address, created_at, expires_at, start_uid) VALUES(?, ?, ?, ?)',
+                (address, created_at.isoformat(), expires_at.isoformat(), start_uid),
             )
             connection.commit()
             alias_id = int(cursor.lastrowid)
@@ -74,6 +100,51 @@ class Database:
             address=address,
             created_at=created_at.astimezone(UTC),
             expires_at=expires_at.astimezone(UTC),
+            start_uid=start_uid,
+        )
+
+    def get_alias(self, alias_id: int) -> AliasRecord | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                '''
+                SELECT id, address, created_at, expires_at, start_uid
+                FROM aliases
+                WHERE id = ?
+                ''',
+                (alias_id,),
+            ).fetchone()
+        return self._row_to_alias(row)
+
+    def find_matching_alias(self, candidate_addresses: list[str], gmail_uid: int) -> AliasRecord | None:
+        if not candidate_addresses:
+            return None
+
+        normalized_addresses = list(dict.fromkeys(address.lower() for address in candidate_addresses))
+        placeholders = ', '.join('?' for _ in normalized_addresses)
+        now = datetime.now(UTC).isoformat()
+        query = f'''
+            SELECT id, address, created_at, expires_at, start_uid
+            FROM aliases
+            WHERE lower(address) IN ({placeholders})
+              AND start_uid < ?
+              AND expires_at > ?
+            ORDER BY id DESC
+            LIMIT 1
+        '''
+        params = [*normalized_addresses, gmail_uid, now]
+        with self.connect() as connection:
+            row = connection.execute(query, params).fetchone()
+        return self._row_to_alias(row)
+
+    def _row_to_alias(self, row: sqlite3.Row | None) -> AliasRecord | None:
+        if row is None:
+            return None
+        return AliasRecord(
+            id=int(row['id']),
+            address=str(row['address']),
+            created_at=datetime.fromisoformat(str(row['created_at'])).astimezone(UTC),
+            expires_at=datetime.fromisoformat(str(row['expires_at'])).astimezone(UTC),
+            start_uid=int(row['start_uid']),
         )
 
     def create_mail(
@@ -152,3 +223,21 @@ class Database:
             )
             connection.commit()
         return cursor.rowcount > 0
+
+    def get_last_seen_uid(self) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM service_state WHERE key = 'last_seen_uid'"
+            ).fetchone()
+        return int(row['value']) if row else -1
+
+    def set_last_seen_uid(self, uid: int) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                '''
+                INSERT INTO service_state(key, value) VALUES('last_seen_uid', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                ''',
+                (str(uid),),
+            )
+            connection.commit()
