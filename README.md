@@ -24,14 +24,23 @@
 
 ## 快速开始
 
+默认 Compose 会直接拉取 GHCR 镜像 `ghcr.io/exynos967/gmail-temp-mail:latest`。
+
 ```bash
 cp .env.example .env
 # 编辑 .env，填入真实 Gmail 地址和 App Password
 
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 服务默认监听 `http://127.0.0.1:8080`。
+
+## 镜像发布
+
+- GitHub Actions 会在推送到 `main` 分支时构建并推送镜像到 `ghcr.io/exynos967/gmail-temp-mail`
+- 默认部署标签为 `ghcr.io/exynos967/gmail-temp-mail:latest`
+- 如需本地自行构建，可直接执行 `docker build -t gmail-temp-mail:local .`
 
 ## 环境变量
 

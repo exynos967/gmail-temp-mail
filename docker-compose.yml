@@ -1,6 +1,6 @@
 services:
   gmail_temp_mail:
-    build: .
+    image: ghcr.io/exynos967/gmail-temp-mail:latest
     container_name: gmail_temp_mail
     restart: unless-stopped
     ports:
