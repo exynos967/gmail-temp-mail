@@ -2,7 +2,13 @@ services:
   gmail_temp_mail:
     build: .
     container_name: gmail_temp_mail
+    restart: unless-stopped
     ports:
       - '8080:8080'
     env_file:
       - .env
+    volumes:
+      - gmail_temp_mail_data:/data
+
+volumes:
+  gmail_temp_mail_data:

@@ -4,6 +4,7 @@ import imaplib
 import logging
 import sqlite3
 import threading
+from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
 from email import policy
 from email.parser import BytesParser
@@ -90,6 +91,12 @@ class NullMailSyncService:
     def get_current_uid_baseline(self) -> int:
         return max(self.database.get_last_seen_uid(), 0)
 
+
+    def _run_cleanup(self) -> None:
+        now = datetime.now(UTC)
+        self.database.delete_expired_aliases(now)
+        self.database.delete_expired_mails(now - timedelta(minutes=self.settings.mail_ttl_minutes))
+
     def start(self) -> None:
         return None
 
@@ -119,6 +126,7 @@ class MailSyncService:
             client.close()
 
     def sync_once(self) -> int:
+        self._run_cleanup()
         client = self.client_factory()
         try:
             last_seen_uid = self.database.get_last_seen_uid()
@@ -158,6 +166,12 @@ class MailSyncService:
             return inserted
         finally:
             client.close()
+
+
+    def _run_cleanup(self) -> None:
+        now = datetime.now(UTC)
+        self.database.delete_expired_aliases(now)
+        self.database.delete_expired_mails(now - timedelta(minutes=self.settings.mail_ttl_minutes))
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():

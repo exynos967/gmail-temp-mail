@@ -224,6 +224,26 @@ class Database:
             connection.commit()
         return cursor.rowcount > 0
 
+
+    def delete_expired_aliases(self, now: datetime | None = None) -> int:
+        cutoff = (now or datetime.now(UTC)).isoformat()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                'DELETE FROM aliases WHERE expires_at <= ?',
+                (cutoff,),
+            )
+            connection.commit()
+        return cursor.rowcount
+
+    def delete_expired_mails(self, cutoff: datetime) -> int:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                'DELETE FROM mails WHERE received_at <= ?',
+                (cutoff.isoformat(),),
+            )
+            connection.commit()
+        return cursor.rowcount
+
     def get_last_seen_uid(self) -> int:
         with self.connect() as connection:
             row = connection.execute(

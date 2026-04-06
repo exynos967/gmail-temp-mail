@@ -1,3 +1,101 @@
 # gmail-temp-mail
 
-A minimal Docker-first Gmail alias temp mail service.
+一个基于 Gmail IMAP 的精简临时邮箱服务，只提供 Docker 部署。
+
+## 特性
+
+- 基于 `.env` 中的 Gmail 主邮箱生成随机别名
+- 别名规则：`点号 + 大小写 + gmail.com/googlemail.com`
+- `POST /api/new_address` 返回别名和对应 Bearer JWT
+- 只从“别名创建之后”开始接收新邮件
+- 后台通过 Gmail IMAP 增量同步，接口只返回原始 RFC822 邮件 `raw`
+- 使用 SQLite 落盘，支持重启恢复
+- 自动清理过期别名与超时邮件
+
+## 前置要求
+
+1. 个人 Gmail 账号（`gmail.com` / `googlemail.com`）
+2. 开启 2FA
+3. 生成 Gmail App Password
+
+参考：
+- Gmail IMAP: <https://developers.google.com/gmail/imap/imap-smtp>
+- App Password: <https://support.google.com/mail/answer/185833>
+
+## 快速开始
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入真实 Gmail 地址和 App Password
+
+docker compose up -d --build
+```
+
+服务默认监听 `http://127.0.0.1:8080`。
+
+## 环境变量
+
+| 变量 | 说明 |
+|---|---|
+| `GMAIL_ADDRESS` | 用于接收邮件的 Gmail 主账号 |
+| `GMAIL_APP_PASSWORD` | Gmail App Password |
+| `SERVICE_API_KEY` | 创建别名时使用的 `x-custom-auth` |
+| `JWT_SECRET` | 别名级 Bearer token 的签名密钥 |
+| `DATABASE_PATH` | SQLite 文件路径，默认挂载到 `/data` |
+| `POLL_INTERVAL_SECONDS` | IMAP 同步轮询间隔 |
+| `ALIAS_TTL_MINUTES` | 别名有效期 |
+| `MAIL_TTL_MINUTES` | 邮件保留期 |
+
+## API
+
+### 1. 创建别名
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/new_address \
+  -H 'x-custom-auth: your-service-api-key'
+```
+
+响应示例：
+
+```json
+{
+  "address_id": 1,
+  "address": "aB.cdEf@googlemail.com",
+  "jwt": "<token>",
+  "created_at": "2026-04-06T12:00:00+00:00",
+  "expires_at": "2026-04-06T13:00:00+00:00"
+}
+```
+
+### 2. 拉取邮件列表
+
+```bash
+curl 'http://127.0.0.1:8080/api/mails?limit=20&offset=0' \
+  -H 'Authorization: Bearer <token>'
+```
+
+### 3. 拉取单封邮件
+
+```bash
+curl http://127.0.0.1:8080/api/mail/1 \
+  -H 'Authorization: Bearer <token>'
+```
+
+### 4. 删除单封邮件
+
+```bash
+curl -X DELETE http://127.0.0.1:8080/api/mails/1 \
+  -H 'Authorization: Bearer <token>'
+```
+
+## 存储说明
+
+- 别名创建时会记录当前 Gmail 收件箱的最新 UID 作为起点
+- 只有 UID 大于该起点的邮件才会被纳入该别名
+- 邮件内容以原始 `raw` 文本存入 SQLite，接口不做附件下载与 HTML 解析
+
+## 限制
+
+- 仅支持个人 Gmail，不支持 Google Workspace 自定义域
+- 依赖 Gmail IMAP，可用性取决于 Gmail 登录状态与 App Password
+- 未实现发送邮件、Webhook、前端页面
