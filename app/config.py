@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     service_api_key: str = ''
     jwt_secret: str = ''
     database_path: str = 'gmail_temp_mail.db'
+    imap_proxy_url: str = ''
     poll_interval_seconds: int = 15
     alias_ttl_minutes: int = 60
     mail_ttl_minutes: int = 1440
@@ -36,6 +37,24 @@ class Settings(BaseSettings):
         return self._parse_numbered_gmail_accounts(
             self._load_environment_values()
         )
+
+    def get_imap_proxy_url(self) -> str:
+        if self.imap_proxy_url.strip():
+            return self.imap_proxy_url.strip()
+        raw_values = self._load_environment_values()
+        for key in (
+            'IMAP_PROXY_URL',
+            'ALL_PROXY',
+            'all_proxy',
+            'HTTPS_PROXY',
+            'https_proxy',
+            'HTTP_PROXY',
+            'http_proxy',
+        ):
+            raw_value = raw_values.get(key, '').strip()
+            if raw_value:
+                return raw_value
+        return ''
 
     def get_gmail_account(self, account_address: str) -> GmailAccount:
         normalized_address = normalize_gmail_address(account_address)

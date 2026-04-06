@@ -4,12 +4,15 @@ import imaplib
 import logging
 import sqlite3
 import threading
-from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from email import policy
 from email.parser import BytesParser
 from email.utils import getaddresses
 from typing import Callable, Protocol
+from urllib.parse import unquote, urlparse
+
+import socks
 
 from app.config import GmailAccount, Settings
 from app.db import Database
@@ -24,22 +27,67 @@ class RemoteMail:
     raw: bytes
 
 
+@dataclass(frozen=True, slots=True)
+class ProxyConfig:
+    scheme: str
+    host: str
+    port: int
+    username: str | None = None
+    password: str | None = None
+    rdns: bool = True
+
+
 class MailboxClient(Protocol):
     def get_max_uid(self) -> int: ...
     def fetch_messages_since(self, last_seen_uid: int) -> list[RemoteMail]: ...
     def close(self) -> None: ...
 
 
+class ProxyAwareIMAP4SSL(imaplib.IMAP4_SSL):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        proxy_config: ProxyConfig,
+        timeout: float | None = None,
+    ):
+        self.proxy_config = proxy_config
+        super().__init__(host, port, timeout=timeout)
+
+    def _create_socket(self, timeout):
+        proxy_type = _get_socks_proxy_type(self.proxy_config.scheme)
+        socket_connection = socks.create_connection(
+            (self.host, self.port),
+            timeout=timeout,
+            proxy_type=proxy_type,
+            proxy_addr=self.proxy_config.host,
+            proxy_port=self.proxy_config.port,
+            proxy_username=self.proxy_config.username,
+            proxy_password=self.proxy_config.password,
+            proxy_rdns=self.proxy_config.rdns,
+        )
+        return self.ssl_context.wrap_socket(
+            socket_connection,
+            server_hostname=self.host,
+        )
+
+
 class GmailImapClient:
-    def __init__(self, account: GmailAccount):
+    def __init__(self, account: GmailAccount, proxy_url: str = ''):
         self.account = account
+        self.proxy_config = _parse_proxy_config(proxy_url)
         self._connection: imaplib.IMAP4_SSL | None = None
 
     def _ensure_connection(self) -> imaplib.IMAP4_SSL:
         if self._connection is not None:
             return self._connection
 
-        connection = imaplib.IMAP4_SSL('imap.gmail.com', 993)
+        connection = _create_imap_connection(
+            'imap.gmail.com',
+            993,
+            self.proxy_config,
+        )
         connection.login(self.account.address, self.account.app_password)
         status, _ = connection.select('INBOX')
         if status != 'OK':
@@ -108,7 +156,12 @@ class MailSyncService:
     ):
         self.settings = settings
         self.database = database
-        self.client_factory = client_factory or GmailImapClient
+        self.client_factory = client_factory or (
+            lambda account: GmailImapClient(
+                account,
+                settings.get_imap_proxy_url(),
+            )
+        )
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
@@ -182,8 +235,9 @@ class MailSyncService:
             return
         try:
             accounts = self.settings.get_gmail_accounts()
+            _parse_proxy_config(self.settings.get_imap_proxy_url())
         except ValueError:
-            logger.exception('mail sync disabled because Gmail credentials are invalid')
+            logger.exception('mail sync disabled because Gmail or proxy settings are invalid')
             return
         if not accounts:
             logger.info('mail sync disabled because Gmail credentials are not configured')
@@ -220,6 +274,47 @@ def _parse_uid_search_response(data: list[bytes | bytearray | None]) -> list[int
     else:
         raw = data[0]
     return [int(item) for item in raw.decode().split() if item.strip()]
+
+
+def _create_imap_connection(
+    host: str,
+    port: int,
+    proxy_config: ProxyConfig | None,
+) -> imaplib.IMAP4_SSL:
+    if proxy_config is None:
+        return imaplib.IMAP4_SSL(host, port)
+    return ProxyAwareIMAP4SSL(host, port, proxy_config=proxy_config)
+
+
+def _parse_proxy_config(proxy_url: str) -> ProxyConfig | None:
+    raw_proxy_url = proxy_url.strip()
+    if not raw_proxy_url:
+        return None
+
+    parsed = urlparse(raw_proxy_url)
+    scheme = parsed.scheme.lower()
+    if scheme not in {'http', 'socks4', 'socks4a', 'socks5', 'socks5h'}:
+        raise ValueError('Unsupported IMAP proxy scheme')
+    if not parsed.hostname:
+        raise ValueError('Invalid IMAP proxy URL')
+
+    default_port = 8080 if scheme == 'http' else 1080
+    return ProxyConfig(
+        scheme=scheme,
+        host=parsed.hostname,
+        port=parsed.port or default_port,
+        username=unquote(parsed.username) if parsed.username else None,
+        password=unquote(parsed.password) if parsed.password else None,
+        rdns=scheme not in {'socks5', 'socks4'},
+    )
+
+
+def _get_socks_proxy_type(scheme: str) -> int:
+    if scheme in {'socks5', 'socks5h'}:
+        return socks.SOCKS5
+    if scheme in {'socks4', 'socks4a'}:
+        return socks.SOCKS4
+    return socks.HTTP
 
 
 

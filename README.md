@@ -48,6 +48,7 @@ docker compose up -d
 |---|---|
 | `GMAIL_ACCOUNTS_1` / `GMAIL_APP_PASSWORD_1` | 多账号模式第 1 个账号及其 App Password |
 | `GMAIL_ACCOUNTS_2` / `GMAIL_APP_PASSWORD_2` | 多账号模式第 2 个账号及其 App Password，可继续递增 |
+| `IMAP_PROXY_URL` | 可选，IMAP 出站代理，例如 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080` |
 | `SERVICE_API_KEY` | 创建别名时使用的 `x-custom-auth` |
 | `JWT_SECRET` | 别名级 Bearer token 的签名密钥 |
 | `DATABASE_PATH` | SQLite 文件路径，默认挂载到 `/data` |
@@ -67,6 +68,8 @@ GMAIL_APP_PASSWORD_2=app_password_two
 说明：
 - 只要存在成对的 `GMAIL_ACCOUNTS_N` + `GMAIL_APP_PASSWORD_N`，就会进入邮箱池并在创建别名时随机选择一个账号
 - 每个账号都会独立维护自己的 IMAP 增量同步游标
+- 代理优先读取 `IMAP_PROXY_URL`，未设置时会继续尝试 `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`
+- HTTP 代理要求支持 `CONNECT` 隧道；SOCKS5 代理推荐使用 `socks5://`
 
 ## API
 
