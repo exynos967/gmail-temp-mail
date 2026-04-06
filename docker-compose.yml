@@ -1,0 +1,8 @@
+services:
+  gmail_temp_mail:
+    build: .
+    container_name: gmail_temp_mail
+    ports:
+      - '8080:8080'
+    env_file:
+      - .env
