@@ -11,7 +11,6 @@ from app.main import create_app
 
 API_KEY = 'service-secret'
 JWT_SECRET = 'jwt-secret'
-BASE_GMAIL = 'abcdef@gmail.com'
 PRIMARY_ACCOUNT = GmailAccount(address='primaryone@gmail.com', app_password='pass-one')
 SECONDARY_ACCOUNT = GmailAccount(address='secondarytwo@gmail.com', app_password='pass-two')
 
@@ -40,10 +39,6 @@ def build_service(
     resolved_settings = settings or Settings(
         service_api_key=API_KEY,
         jwt_secret=JWT_SECRET,
-        gmail_accounts=(
-            'primary.one@gmail.com:pass-one,'
-            'secondary.two@gmail.com:pass-two'
-        ),
         database_path=str(tmp_path / 'gmail_temp_mail.db'),
         alias_ttl_minutes=60,
         mail_ttl_minutes=60,
@@ -70,7 +65,11 @@ def build_raw_mail(*, to_address: str, subject: str, message_id: str) -> bytes:
 
 
 
-def test_first_sync_initializes_uid_baseline_without_importing_old_mail(tmp_path: Path) -> None:
+def test_first_sync_initializes_uid_baseline_without_importing_old_mail(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('GMAIL_ACCOUNTS_1', 'primary.one@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_1', 'pass-one')
+    monkeypatch.setenv('GMAIL_ACCOUNTS_2', 'secondary.two@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_2', 'pass-two')
     mailbox_by_account = {
         PRIMARY_ACCOUNT.address: [
             RemoteMail(uid=1, raw=build_raw_mail(to_address='nobody@gmail.com', subject='old', message_id='<old@example.com>')),
@@ -89,7 +88,11 @@ def test_first_sync_initializes_uid_baseline_without_importing_old_mail(tmp_path
 
 
 
-def test_new_address_uses_live_mailbox_uid_as_start_boundary(tmp_path: Path) -> None:
+def test_new_address_uses_live_mailbox_uid_as_start_boundary(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('GMAIL_ACCOUNTS_1', 'primary.one@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_1', 'pass-one')
+    monkeypatch.setenv('GMAIL_ACCOUNTS_2', 'secondary.two@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_2', 'pass-two')
     mailbox_by_account = {
         PRIMARY_ACCOUNT.address: [
             RemoteMail(uid=5, raw=build_raw_mail(to_address='someone@gmail.com', subject='existing', message_id='<existing@example.com>')),
@@ -99,7 +102,6 @@ def test_new_address_uses_live_mailbox_uid_as_start_boundary(tmp_path: Path) -> 
     settings = Settings(
         service_api_key=API_KEY,
         jwt_secret=JWT_SECRET,
-        gmail_accounts='primary.one@gmail.com:pass-one,secondary.two@gmail.com:pass-two',
         database_path=str(tmp_path / 'gmail_temp_mail.db'),
         alias_ttl_minutes=60,
         mail_ttl_minutes=60,
@@ -118,7 +120,11 @@ def test_new_address_uses_live_mailbox_uid_as_start_boundary(tmp_path: Path) -> 
 
 
 
-def test_sync_imports_only_mail_from_same_account_after_alias_start_uid(tmp_path: Path) -> None:
+def test_sync_imports_only_mail_from_same_account_after_alias_start_uid(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('GMAIL_ACCOUNTS_1', 'primary.one@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_1', 'pass-one')
+    monkeypatch.setenv('GMAIL_ACCOUNTS_2', 'secondary.two@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_2', 'pass-two')
     mailbox_by_account = {
         PRIMARY_ACCOUNT.address: [],
         SECONDARY_ACCOUNT.address: [],
@@ -157,7 +163,11 @@ def test_sync_imports_only_mail_from_same_account_after_alias_start_uid(tmp_path
 
 
 
-def test_sync_once_cleans_expired_aliases_and_old_mail(tmp_path: Path) -> None:
+def test_sync_once_cleans_expired_aliases_and_old_mail(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('GMAIL_ACCOUNTS_1', 'primary.one@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_1', 'pass-one')
+    monkeypatch.setenv('GMAIL_ACCOUNTS_2', 'secondary.two@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_2', 'pass-two')
     mailbox_by_account = {
         PRIMARY_ACCOUNT.address: [],
         SECONDARY_ACCOUNT.address: [],

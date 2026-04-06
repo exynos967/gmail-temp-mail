@@ -48,7 +48,8 @@ docker compose up -d
 |---|---|
 | `GMAIL_ADDRESS` | 单账号模式使用的 Gmail 主账号 |
 | `GMAIL_APP_PASSWORD` | 单账号模式使用的 Gmail App Password |
-| `GMAIL_ACCOUNTS` | 多账号模式邮箱池，格式：`邮箱1:密码1,邮箱2:密码2`，配置后优先于单账号字段 |
+| `GMAIL_ACCOUNTS_1` / `GMAIL_APP_PASSWORD_1` | 多账号模式第 1 个账号及其 App Password |
+| `GMAIL_ACCOUNTS_2` / `GMAIL_APP_PASSWORD_2` | 多账号模式第 2 个账号及其 App Password，可继续递增 |
 | `SERVICE_API_KEY` | 创建别名时使用的 `x-custom-auth` |
 | `JWT_SECRET` | 别名级 Bearer token 的签名密钥 |
 | `DATABASE_PATH` | SQLite 文件路径，默认挂载到 `/data` |
@@ -59,11 +60,14 @@ docker compose up -d
 多账号示例：
 
 ```env
-GMAIL_ACCOUNTS=alpha.one@gmail.com:app_password_one,beta.two@gmail.com:app_password_two
+GMAIL_ACCOUNTS_1=alpha.one@gmail.com
+GMAIL_APP_PASSWORD_1=app_password_one
+GMAIL_ACCOUNTS_2=beta.two@gmail.com
+GMAIL_APP_PASSWORD_2=app_password_two
 ```
 
 说明：
-- `GMAIL_ACCOUNTS` 配置后，会进入邮箱池并在创建别名时随机选择一个账号
+- 只要存在成对的 `GMAIL_ACCOUNTS_N` + `GMAIL_APP_PASSWORD_N`，就会进入邮箱池并在创建别名时随机选择一个账号
 - 每个账号都会独立维护自己的 IMAP 增量同步游标
 - 旧的 `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` 仍可继续使用
 

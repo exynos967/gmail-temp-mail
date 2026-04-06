@@ -12,7 +12,6 @@ from app.main import create_app
 API_KEY = 'service-secret'
 JWT_SECRET = 'jwt-secret'
 BASE_GMAIL = 'Abc.Def@gmail.com'
-POOL_GMAIL_ACCOUNTS = 'alpha.one@gmail.com:pass-one,beta.two@gmail.com:pass-two'
 
 
 def build_client(tmp_path: Path) -> TestClient:
@@ -33,9 +32,13 @@ def test_generate_random_gmail_alias_keeps_same_identity() -> None:
     assert normalize_gmail_address(alias) == 'abcdef@gmail.com'
 
 
-def test_settings_parse_multiple_gmail_accounts() -> None:
+def test_settings_parse_numbered_gmail_account_pool(monkeypatch) -> None:
+    monkeypatch.setenv('GMAIL_ACCOUNTS_1', 'alpha.one@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_1', 'pass one')
+    monkeypatch.setenv('GMAIL_ACCOUNTS_2', 'beta.two@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_2', 'pass-two')
+
     settings = Settings(
-        gmail_accounts=POOL_GMAIL_ACCOUNTS,
         service_api_key=API_KEY,
         jwt_secret=JWT_SECRET,
     )
@@ -46,7 +49,7 @@ def test_settings_parse_multiple_gmail_accounts() -> None:
         'alphaone@gmail.com',
         'betatwo@gmail.com',
     ]
-    assert [account.app_password for account in accounts] == ['pass-one', 'pass-two']
+    assert [account.app_password for account in accounts] == ['passone', 'pass-two']
 
 
 def test_new_address_requires_service_api_key(tmp_path: Path) -> None:
@@ -76,8 +79,11 @@ def test_new_address_returns_alias_and_jwt(tmp_path: Path) -> None:
 
 
 def test_new_address_uses_selected_account_from_pool(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('GMAIL_ACCOUNTS_1', 'alpha.one@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_1', 'pass-one')
+    monkeypatch.setenv('GMAIL_ACCOUNTS_2', 'beta.two@gmail.com')
+    monkeypatch.setenv('GMAIL_APP_PASSWORD_2', 'pass-two')
     settings = Settings(
-        gmail_accounts=POOL_GMAIL_ACCOUNTS,
         service_api_key=API_KEY,
         jwt_secret=JWT_SECRET,
         database_path=str(tmp_path / 'pool.db'),
