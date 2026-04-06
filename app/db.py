@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -41,6 +42,22 @@ class Database:
                 )
                 '''
             )
+            connection.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS mails (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    alias_id INTEGER NOT NULL,
+                    address TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    raw TEXT NOT NULL,
+                    gmail_uid INTEGER,
+                    received_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(alias_id, gmail_uid)
+                )
+                '''
+            )
             connection.commit()
 
     def create_alias(self, address: str, created_at: datetime, expires_at: datetime) -> AliasRecord:
@@ -58,3 +75,80 @@ class Database:
             created_at=created_at.astimezone(UTC),
             expires_at=expires_at.astimezone(UTC),
         )
+
+    def create_mail(
+        self,
+        *,
+        alias_id: int,
+        address: str,
+        source: str,
+        message_id: str,
+        raw: str,
+        gmail_uid: int | None = None,
+        received_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        created_at = datetime.now(UTC)
+        mail_received_at = received_at or created_at
+        with self.connect() as connection:
+            cursor = connection.execute(
+                '''
+                INSERT INTO mails(alias_id, address, source, message_id, raw, gmail_uid, received_at, created_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    alias_id,
+                    address,
+                    source,
+                    message_id,
+                    raw,
+                    gmail_uid,
+                    mail_received_at.isoformat(),
+                    created_at.isoformat(),
+                ),
+            )
+            connection.commit()
+            mail_id = int(cursor.lastrowid)
+        return self.get_mail(mail_id, address)
+
+    def list_mails(self, address: str, limit: int, offset: int) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                '''
+                SELECT id, address, source, message_id, raw, received_at, created_at
+                FROM mails
+                WHERE address = ?
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                ''',
+                (address, limit, offset),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_mails(self, address: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                'SELECT count(*) AS count FROM mails WHERE address = ?',
+                (address,),
+            ).fetchone()
+        return int(row['count']) if row else 0
+
+    def get_mail(self, mail_id: int, address: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                '''
+                SELECT id, address, source, message_id, raw, received_at, created_at
+                FROM mails
+                WHERE id = ? AND address = ?
+                ''',
+                (mail_id, address),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def delete_mail(self, mail_id: int, address: str) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                'DELETE FROM mails WHERE id = ? AND address = ?',
+                (mail_id, address),
+            )
+            connection.commit()
+        return cursor.rowcount > 0

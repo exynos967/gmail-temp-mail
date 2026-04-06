@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from app.aliasing import generate_random_gmail_alias, normalize_gmail_address
-from app.auth import require_service_api_key
+from app.auth import AddressTokenPayload, require_address_token, require_service_api_key
 from app.config import Settings
 from app.db import AliasRecord, Database
 
@@ -57,6 +57,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             'expires_at': alias_record.expires_at.isoformat(),
         }
 
+    @app.get('/api/mails')
+    def list_mails(
+        request: Request,
+        token_payload: AddressTokenPayload = Depends(require_address_token),
+    ) -> dict[str, object]:
+        limit = _parse_limit(request.query_params.get('limit'))
+        offset = _parse_offset(request.query_params.get('offset'))
+        current_database: Database = request.app.state.database
+        results = current_database.list_mails(token_payload.address, limit, offset)
+        count = current_database.count_mails(token_payload.address) if offset == 0 else 0
+        return {'results': results, 'count': count}
+
+    @app.get('/api/mail/{mail_id}')
+    def get_mail(
+        mail_id: int,
+        request: Request,
+        token_payload: AddressTokenPayload = Depends(require_address_token),
+    ) -> dict[str, object] | None:
+        current_database: Database = request.app.state.database
+        return current_database.get_mail(mail_id, token_payload.address)
+
+    @app.delete('/api/mails/{mail_id}')
+    def delete_mail(
+        mail_id: int,
+        request: Request,
+        token_payload: AddressTokenPayload = Depends(require_address_token),
+    ) -> dict[str, bool]:
+        current_database: Database = request.app.state.database
+        return {'success': current_database.delete_mail(mail_id, token_payload.address)}
+
     return app
 
 
@@ -83,6 +113,30 @@ def _create_unique_alias(database: Database, settings: Settings) -> AliasRecord:
             continue
 
     raise HTTPException(status_code=500, detail='Failed to generate unique alias')
+
+
+def _parse_limit(value: str | None) -> int:
+    if value is None:
+        raise HTTPException(status_code=400, detail='Invalid limit')
+    try:
+        limit = int(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail='Invalid limit') from exc
+    if limit <= 0 or limit > 100:
+        raise HTTPException(status_code=400, detail='Invalid limit')
+    return limit
+
+
+def _parse_offset(value: str | None) -> int:
+    if value is None:
+        raise HTTPException(status_code=400, detail='Invalid offset')
+    try:
+        offset = int(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail='Invalid offset') from exc
+    if offset < 0:
+        raise HTTPException(status_code=400, detail='Invalid offset')
+    return offset
 
 
 app = create_app()
