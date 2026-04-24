@@ -18,6 +18,8 @@ from app.mail_sync import MailSyncService, NullMailSyncService
 
 
 logger = logging.getLogger(__name__)
+_LOG_FORMAT = '%(asctime)s %(levelname)s %(name)s: %(message)s'
+_LOG_DATE_FORMAT = '%H:%M:%S'
 
 
 def create_app(
@@ -27,6 +29,7 @@ def create_app(
     start_background_sync: bool = False,
 ) -> FastAPI:
     resolved_settings = settings or Settings()
+    configure_logging(resolved_settings.log_level)
     database = Database(resolved_settings.database_path)
     database.initialize()
     if mail_sync_service is not None:
@@ -126,6 +129,26 @@ def create_app(
         return {'success': current_database.delete_mail(mail_id, token_payload.address)}
 
     return app
+
+
+def configure_logging(log_level: str) -> None:
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    formatter = logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT)
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
+    else:
+        for handler in root_logger.handlers:
+            handler.setFormatter(formatter)
+    root_logger.setLevel(level)
+
+    for logger_name in ('uvicorn', 'uvicorn.error', 'uvicorn.access'):
+        named_logger = logging.getLogger(logger_name)
+        named_logger.setLevel(level)
+        for handler in named_logger.handlers:
+            handler.setFormatter(formatter)
 
 
 def _validate_alias_creation_settings(settings: Settings) -> None:

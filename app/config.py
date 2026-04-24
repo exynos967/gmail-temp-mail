@@ -9,6 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.aliasing import normalize_gmail_address
 
 
+_ALLOWED_LOG_LEVELS = {'CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'}
+
+
 @dataclass(frozen=True, slots=True)
 class GmailAccount:
     address: str
@@ -24,6 +27,7 @@ class Settings(BaseSettings):
     alias_ttl_minutes: int = 60
     mail_ttl_minutes: int = 1440
     gmail_alias_plus_tag_enabled: bool = True
+    log_level: str = 'INFO'
 
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 
@@ -33,6 +37,14 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError('must be > 0')
         return value
+
+    @field_validator('log_level')
+    @classmethod
+    def normalize_log_level(cls, value: str) -> str:
+        normalized_value = value.strip().upper()
+        if normalized_value not in _ALLOWED_LOG_LEVELS:
+            raise ValueError(f'must be one of {", ".join(sorted(_ALLOWED_LOG_LEVELS))}')
+        return normalized_value
 
     def get_gmail_accounts(self) -> list[GmailAccount]:
         return self._parse_numbered_gmail_accounts(

@@ -56,6 +56,7 @@ docker compose up -d
 | `ALIAS_TTL_MINUTES` | 别名有效期 |
 | `MAIL_TTL_MINUTES` | 邮件保留期 |
 | `GMAIL_ALIAS_PLUS_TAG_ENABLED` | 是否在生成的别名中加入 `+随机tag`，默认 `true` |
+| `LOG_LEVEL` | 日志级别，默认 `INFO`，可选 `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` |
 
 多账号示例：
 
