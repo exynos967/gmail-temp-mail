@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     poll_interval_seconds: int = 15
     alias_ttl_minutes: int = 60
     mail_ttl_minutes: int = 1440
+    gmail_alias_plus_tag_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 

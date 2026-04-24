@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.aliasing import normalize_gmail_alias_identity
+
 
 @dataclass(slots=True)
 class AliasRecord:
@@ -70,6 +72,18 @@ class Database:
                 )
                 '''
             )
+            connection.execute(
+                '''
+                CREATE INDEX IF NOT EXISTS idx_aliases_account_expiry_start_uid
+                ON aliases(account_address, expires_at, start_uid)
+                '''
+            )
+            connection.execute(
+                '''
+                CREATE INDEX IF NOT EXISTS idx_mails_address_id
+                ON mails(address, id DESC)
+                '''
+            )
             self._ensure_aliases_account_address_column(connection)
             self._ensure_aliases_start_uid_column(connection)
             connection.commit()
@@ -100,7 +114,21 @@ class Database:
         expires_at: datetime,
         start_uid: int = 0,
     ) -> AliasRecord:
+        alias_identity = normalize_gmail_alias_identity(address)
         with self.connect() as connection:
+            rows = connection.execute('SELECT address FROM aliases').fetchall()
+            existing_addresses = [str(row['address']) for row in rows]
+            has_plus_tag = alias_identity != normalize_gmail_alias_identity(account_address)
+            alias_exists = (
+                any(
+                    normalize_gmail_alias_identity(existing_address) == alias_identity
+                    for existing_address in existing_addresses
+                )
+                if has_plus_tag
+                else any(existing_address.lower() == address.lower() for existing_address in existing_addresses)
+            )
+            if alias_exists:
+                raise sqlite3.IntegrityError('alias address already exists')
             cursor = connection.execute(
                 '''
                 INSERT INTO aliases(address, account_address, created_at, expires_at, start_uid)
@@ -163,8 +191,31 @@ class Database:
             return None
 
         normalized_addresses = list(dict.fromkeys(address.lower() for address in candidate_addresses))
-        placeholders = ', '.join('?' for _ in normalized_addresses)
         now = datetime.now(UTC).isoformat()
+        exact_match = self._find_exact_matching_alias(
+            normalized_addresses,
+            gmail_uid,
+            account_address,
+            now,
+        )
+        if exact_match is not None:
+            return exact_match
+
+        return self._find_unambiguous_canonical_matching_alias(
+            normalized_addresses,
+            gmail_uid,
+            account_address,
+            now,
+        )
+
+    def _find_exact_matching_alias(
+        self,
+        normalized_addresses: list[str],
+        gmail_uid: int,
+        account_address: str,
+        now: str,
+    ) -> AliasRecord | None:
+        placeholders = ', '.join('?' for _ in normalized_addresses)
         query = f'''
             SELECT id, address, account_address, created_at, expires_at, start_uid
             FROM aliases
@@ -179,6 +230,61 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(query, params).fetchone()
         return self._row_to_alias(row)
+
+    def _find_unambiguous_canonical_matching_alias(
+        self,
+        normalized_addresses: list[str],
+        gmail_uid: int,
+        account_address: str,
+        now: str,
+    ) -> AliasRecord | None:
+        candidate_identities = self._canonical_gmail_identities(
+            normalized_addresses,
+            account_address,
+        )
+        if not candidate_identities:
+            return None
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                '''
+                SELECT id, address, account_address, created_at, expires_at, start_uid
+                FROM aliases
+                WHERE account_address = ?
+                  AND start_uid < ?
+                  AND expires_at > ?
+                ORDER BY id DESC
+                ''',
+                (account_address, gmail_uid, now),
+            ).fetchall()
+
+        matches = [
+            alias
+            for row in rows
+            if (alias := self._row_to_alias(row)) is not None
+            and normalize_gmail_alias_identity(alias.address) in candidate_identities
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
+    def _canonical_gmail_identities(
+        self,
+        addresses: list[str],
+        account_address: str,
+    ) -> set[str]:
+        identities: set[str] = set()
+        for address in addresses:
+            if address == account_address:
+                continue
+            try:
+                identity = normalize_gmail_alias_identity(address)
+                if identity == normalize_gmail_alias_identity(account_address):
+                    continue
+                identities.add(identity)
+            except ValueError:
+                continue
+        return identities
 
     def _row_to_alias(self, row: sqlite3.Row | None) -> AliasRecord | None:
         if row is None:

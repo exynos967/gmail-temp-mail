@@ -5,7 +5,7 @@
 ## 特性
 
 - 基于 `.env` 中的 Gmail 邮箱池随机生成别名
-- 别名规则：`点号 + 大小写 + gmail.com/googlemail.com`
+- 别名规则：`点号 + 大小写 + +随机tag + gmail.com/googlemail.com`
 - `POST /api/new_address` 返回别名和对应 Bearer JWT
 - 只从“别名创建之后”开始接收新邮件
 - 后台按账号分别通过 Gmail IMAP 增量同步，接口只返回原始 RFC822 邮件 `raw`
@@ -55,6 +55,7 @@ docker compose up -d
 | `POLL_INTERVAL_SECONDS` | IMAP 同步轮询间隔 |
 | `ALIAS_TTL_MINUTES` | 别名有效期 |
 | `MAIL_TTL_MINUTES` | 邮件保留期 |
+| `GMAIL_ALIAS_PLUS_TAG_ENABLED` | 是否在生成的别名中加入 `+随机tag`，默认 `true` |
 
 多账号示例：
 
@@ -70,6 +71,7 @@ GMAIL_APP_PASSWORD_2=app_password_two
 - 每个账号都会独立维护自己的 IMAP 增量同步游标
 - 代理优先读取 `IMAP_PROXY_URL`，未设置时会继续尝试 `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`
 - HTTP 代理要求支持 `CONNECT` 隧道；SOCKS5 代理推荐使用 `socks5://`
+- 地址中的 `+随机tag` 用于把 Gmail 收到的邮件安全归属到某个临时地址；如果目标网站不接受 `+`，可以设置 `GMAIL_ALIAS_PLUS_TAG_ENABLED=false`，但同一 Gmail 账号下多个无 `+tag` 活跃别名无法可靠区分，可能出现邮件无法归属到临时地址的情况
 
 ## API
 
@@ -98,6 +100,8 @@ curl -X POST http://127.0.0.1:8080/api/new_address \
 curl 'http://127.0.0.1:8080/api/mails?limit=20&offset=0' \
   -H 'Authorization: Bearer <token>'
 ```
+
+`limit` 默认 `20`，最大 `100`；`offset` 默认 `0`。
 
 ### 3. 拉取单封邮件
 

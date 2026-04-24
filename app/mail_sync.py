@@ -105,10 +105,11 @@ class GmailImapClient:
 
     def fetch_messages_since(self, last_seen_uid: int) -> list[RemoteMail]:
         connection = self._ensure_connection()
-        status, data = connection.uid('search', None, 'ALL')
+        start_uid = max(last_seen_uid + 1, 1)
+        status, data = connection.uid('search', None, 'UID', f'{start_uid}:*')
         if status != 'OK':
             raise RuntimeError('Failed to search mailbox UIDs')
-        new_uids = [uid for uid in _parse_uid_search_response(data) if uid > last_seen_uid]
+        new_uids = _parse_uid_search_response(data)
         result: list[RemoteMail] = []
         for uid in new_uids:
             status, message_data = connection.uid('fetch', str(uid), '(RFC822)')
@@ -183,20 +184,24 @@ class MailSyncService:
         client = self.client_factory(account)
         try:
             last_seen_uid = self.database.get_last_seen_uid(account.address)
+            min_start_uid = self.database.get_lowest_alias_start_uid(account.address)
             if last_seen_uid < 0:
-                min_start_uid = self.database.get_lowest_alias_start_uid(account.address)
                 if min_start_uid is None:
                     baseline_uid = client.get_max_uid()
                     self.database.set_last_seen_uid(account.address, baseline_uid)
                     return 0
-                last_seen_uid = min_start_uid - 1
+                fetch_after_uid = min_start_uid - 1
+            else:
+                fetch_after_uid = last_seen_uid
+                if min_start_uid is not None:
+                    fetch_after_uid = min(fetch_after_uid, min_start_uid - 1)
 
             remote_mails = sorted(
-                client.fetch_messages_since(last_seen_uid),
+                client.fetch_messages_since(fetch_after_uid),
                 key=lambda item: item.uid,
             )
             inserted_count = 0
-            max_seen_uid = last_seen_uid
+            max_seen_uid = max(last_seen_uid, fetch_after_uid)
             for remote_mail in remote_mails:
                 max_seen_uid = max(max_seen_uid, remote_mail.uid)
                 matched_alias = self.database.find_matching_alias(

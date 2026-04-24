@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import random
 import sqlite3
 from contextlib import asynccontextmanager
@@ -14,6 +15,9 @@ from app.auth import AddressTokenPayload, require_address_token, require_service
 from app.config import GmailAccount, Settings
 from app.db import AliasRecord, Database
 from app.mail_sync import MailSyncService, NullMailSyncService
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -72,7 +76,7 @@ def create_app(
             current_database,
             current_settings,
             selected_account.address,
-            request.app.state.mail_sync.get_current_uid_baseline(selected_account.address),
+            _get_current_uid_baseline(request, selected_account.address),
         )
         token = jwt.encode(
             {
@@ -151,7 +155,10 @@ def _create_unique_alias(
     expires_at = created_at + timedelta(minutes=settings.alias_ttl_minutes)
 
     for _ in range(20):
-        address = generate_random_gmail_alias(account_address)
+        address = generate_random_gmail_alias(
+            account_address,
+            include_plus_tag=settings.gmail_alias_plus_tag_enabled,
+        )
         try:
             return database.create_alias(
                 address,
@@ -166,9 +173,20 @@ def _create_unique_alias(
     raise HTTPException(status_code=500, detail='Failed to generate unique alias')
 
 
+def _get_current_uid_baseline(request: Request, account_address: str) -> int:
+    try:
+        return request.app.state.mail_sync.get_current_uid_baseline(account_address)
+    except Exception as exc:
+        logger.exception('failed to read current Gmail UID baseline')
+        raise HTTPException(
+            status_code=503,
+            detail='Failed to read Gmail UID baseline',
+        ) from exc
+
+
 def _parse_limit(value: str | None) -> int:
     if value is None:
-        raise HTTPException(status_code=400, detail='Invalid limit')
+        return 20
     try:
         limit = int(value)
     except ValueError as exc:
@@ -180,7 +198,7 @@ def _parse_limit(value: str | None) -> int:
 
 def _parse_offset(value: str | None) -> int:
     if value is None:
-        raise HTTPException(status_code=400, detail='Invalid offset')
+        return 0
     try:
         offset = int(value)
     except ValueError as exc:
